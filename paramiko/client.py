@@ -25,7 +25,7 @@ import getpass
 import os
 import socket
 import warnings
-from errno import ECONNREFUSED
+from errno import ECONNREFUSED, EHOSTUNREACH
 
 from paramiko.agent import Agent
 from paramiko.common import *
@@ -312,7 +312,8 @@ class SSHClient (object):
                 break
             except socket.error, e:
                 # If the port is not open on IPv6 for example, we may still try IPv4.
-                if e.errno != ECONNREFUSED:
+                # Likewise if the host is not reachable using that address family.
+                if e.errno not in (ECONNREFUSED, EHOSTUNREACH):
                     raise
 
         t = self._transport = Transport(sock)
