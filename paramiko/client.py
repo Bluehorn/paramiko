@@ -25,6 +25,7 @@ import getpass
 import os
 import socket
 import warnings
+from errno import ECONNREFUSED
 
 from paramiko.agent import Agent
 from paramiko.common import *
@@ -226,6 +227,25 @@ class SSHClient (object):
         """
         self._policy = policy
 
+    def _families_and_addresses(self, hostname, port):
+        """
+        Iterator over pairs of address families and addresses to try for connecting.
+        @param hostname: the server to connect to
+        @type hostname: str
+        @param port: the server port to connect to
+        @type port: int
+        """
+        guess = True
+        for (family, socktype, proto, canonname, sockaddr) in socket.getaddrinfo(hostname, port, socket.AF_UNSPEC, socket.SOCK_STREAM):
+            if socktype == socket.SOCK_STREAM:
+                yield family, sockaddr
+                guess = False
+
+        if guess:
+            # some OS like AIX don't indicate SOCK_STREAM support, so just guess. :(
+            family, _, _, _, sockaddr = socket.getaddrinfo(hostname, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            yield family, sockaddr
+
     def connect(self, hostname, port=SSH_PORT, username=None, password=None, pkey=None,
                 key_filename=None, timeout=None, allow_agent=True, look_for_keys=True,
                 compress=False):
@@ -279,21 +299,22 @@ class SSHClient (object):
             establishing an SSH session
         @raise socket.error: if a socket error occurred while connecting
         """
-        for (family, socktype, proto, canonname, sockaddr) in socket.getaddrinfo(hostname, port, socket.AF_UNSPEC, socket.SOCK_STREAM):
-            if socktype == socket.SOCK_STREAM:
-                af = family
-                addr = sockaddr
-                break
-        else:
-            # some OS like AIX don't indicate SOCK_STREAM support, so just guess. :(
-            af, _, _, _, addr = socket.getaddrinfo(hostname, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
-        sock = socket.socket(af, socket.SOCK_STREAM)
-        if timeout is not None:
+
+        for af, addr in self._families_and_addresses(hostname, port):
             try:
-                sock.settimeout(timeout)
-            except:
-                pass
-        sock.connect(addr)
+                sock = socket.socket(af, socket.SOCK_STREAM)
+                if timeout is not None:
+                    try:
+                        sock.settimeout(timeout)
+                    except:
+                        pass
+                sock.connect(addr)
+                break
+            except socket.error, e:
+                # If the port is not open on IPv6 for example, we may still try IPv4.
+                if e.errno != ECONNREFUSED:
+                    raise
+
         t = self._transport = Transport(sock)
         t.use_compression(compress=compress)
         if self._log_channel is not None:
