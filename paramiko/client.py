@@ -248,7 +248,7 @@ class SSHClient (object):
 
     def connect(self, hostname, port=SSH_PORT, username=None, password=None, pkey=None,
                 key_filename=None, timeout=None, allow_agent=True, look_for_keys=True,
-                compress=False):
+                compress=False, channel=None):
         """
         Connect to an SSH server and authenticate to it.  The server's host key
         is checked against the system host keys (see L{load_system_host_keys})
@@ -291,6 +291,9 @@ class SSHClient (object):
         @type look_for_keys: bool
         @param compress: set to True to turn on compression
         @type compress: bool
+        @param channel: an existing socket to use instead of connecting to hostname, None
+            if a new socket should be connected
+        @type channel: socket/Channel
 
         @raise BadHostKeyException: if the server's host key could not be
             verified
@@ -300,23 +303,28 @@ class SSHClient (object):
         @raise socket.error: if a socket error occurred while connecting
         """
 
-        for af, addr in self._families_and_addresses(hostname, port):
-            try:
-                sock = socket.socket(af, socket.SOCK_STREAM)
-                if timeout is not None:
-                    try:
-                        sock.settimeout(timeout)
-                    except:
-                        pass
-                sock.connect(addr)
-                break
-            except socket.error, e:
-                # If the port is not open on IPv6 for example, we may still try IPv4.
-                # Likewise if the host is not reachable using that address family.
-                if e.errno not in (ECONNREFUSED, EHOSTUNREACH):
-                    raise
+        if channel is None:
+            for af, addr in self._families_and_addresses(hostname, port):
+                try:
+                    sock = socket.socket(af, socket.SOCK_STREAM)
+                    if timeout is not None:
+                        try:
+                            sock.settimeout(timeout)
+                        except:
+                            pass
+                    sock.connect(addr)
+                    break
+                except socket.error, e:
+                    # If the port is not open on IPv6 for example, we may still try IPv4.
+                    # Likewise if the host is not reachable using that address family.
+                    if e.errno not in (ECONNREFUSED, EHOSTUNREACH):
+                        raise
+            channel = sock
+        else:
+            if timeout is not None:
+                channel.settimeout(timeout)
 
-        t = self._transport = Transport(sock)
+        t = self._transport = Transport(channel)
         t.use_compression(compress=compress)
         if self._log_channel is not None:
             t.set_log_channel(self._log_channel)

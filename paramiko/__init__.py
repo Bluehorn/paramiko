@@ -65,6 +65,8 @@ __version__ = "1.7.7.1 (George)"
 __version_info__ = (1, 7, 7, 1)
 __license__ = "GNU Lesser General Public License (LGPL)"
 
+__patches__ = "dynamore_client_open_channel",
+
 
 from transport import SecurityOptions, Transport
 from client import SSHClient, MissingHostKeyPolicy, AutoAddPolicy, RejectPolicy, WarningPolicy
