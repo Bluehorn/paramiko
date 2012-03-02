@@ -319,6 +319,12 @@ class SSHClient (object):
                     # Likewise if the host is not reachable using that address family.
                     if e.errno not in (ECONNREFUSED, EHOSTUNREACH):
                         raise
+            else:
+                # We can only get here in case all connection attempts failed as
+                # _families_and_addresses will yield at least one result or raise an exception.
+                # So reraise that exception or we end up with a borked socket that gives EOFError
+                # on each access.
+                raise
             channel = sock
         else:
             if timeout is not None:
