@@ -469,7 +469,11 @@ class SSHClient (object):
         for key_filename in key_filenames:
             for pkey_class in (RSAKey, DSSKey):
                 try:
-                    key = pkey_class.from_private_key_file(key_filename, password)
+                    try:
+                        key = pkey_class.from_private_key_file(key_filename, password)
+                    except SSHException:
+                        #  Can not load key, try next format.
+                        continue
                     self._log(DEBUG, 'Trying key %s from %s' % (hexlify(key.get_fingerprint()), key_filename))
                     self._transport.auth_publickey(username, key)
                     return
