@@ -467,18 +467,26 @@ class SSHClient (object):
                 saved_exception = e
 
         for key_filename in key_filenames:
+            key = None
+            keyload_exception = None
+
             for pkey_class in (RSAKey, DSSKey):
                 try:
-                    try:
-                        key = pkey_class.from_private_key_file(key_filename, password)
-                    except SSHException:
-                        #  Can not load key, try next format.
-                        continue
-                    self._log(DEBUG, 'Trying key %s from %s' % (hexlify(key.get_fingerprint()), key_filename))
-                    self._transport.auth_publickey(username, key)
-                    return
+                    key = pkey_class.from_private_key_file(key_filename, password)
+                    break
                 except SSHException, e:
-                    saved_exception = e
+                    keyload_exception = e
+
+            if keyload_exception is not None:
+                self._log(DEBUG, 'Could not load key from %s: %s' % (key_filename, str(keyload_exception)))
+                continue
+
+            self._log(DEBUG, 'Trying key %s from %s' % (hexlify(key.get_fingerprint()), key_filename))
+            try:
+                self._transport.auth_publickey(username, key)
+                return
+            except SSHException, e:
+                saved_exception = e
 
         if allow_agent:
             if self._agent == None:
