@@ -479,7 +479,7 @@ class SSHClient (object):
 
             if keyload_exception is not None:
                 self._log(DEBUG, 'Could not load key from %s: %s' % (key_filename, str(keyload_exception)))
-                continue
+                raise keyload_exception
 
             self._log(DEBUG, 'Trying key %s from %s' % (hexlify(key.get_fingerprint()), key_filename))
             try:
