@@ -287,7 +287,8 @@ class PKey (object):
         while (start < len(lines)) and (lines[start].strip() != '-----BEGIN ' + tag + ' PRIVATE KEY-----'):
             start += 1
         if start >= len(lines):
-            raise SSHException('not a valid ' + tag + ' private key file')
+            filename = getattr(f, "name", "<unknown>")
+            raise SSHException('%r is not a valid %s private key file' % (filename, tag))
         # parse any headers first
         headers = {}
         start += 1
