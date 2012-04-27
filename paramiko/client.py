@@ -473,6 +473,8 @@ class SSHClient (object):
             for pkey_class in (RSAKey, DSSKey):
                 try:
                     key = pkey_class.from_private_key_file(key_filename, password)
+                    # Drop the exception if loading was successful.
+                    keyload_exception = None
                     break
                 except SSHException, e:
                     keyload_exception = e
