@@ -47,7 +47,7 @@ released under the GNU Lesser General Public License (LGPL).
 
 Website: U{http://www.lag.net/paramiko/}
 
-@version: 1.7.7.1 (George)
+@version: 1.7.7.1.2012.06.19 (George)
 @author: Robey Pointer
 @contact: robeypointer@gmail.com
 @license: GNU Lesser General Public License (LGPL)
@@ -60,12 +60,12 @@ if sys.version_info < (2, 2):
 
 
 __author__ = "Robey Pointer <robeypointer@gmail.com>"
-__date__ = "21 May 2011"
-__version__ = "1.7.7.1 (George)"
-__version_info__ = (1, 7, 7, 1)
+__date__ = "19 June 2012"
+__version__ = "1.7.7.1.2012.06.19 (George)"
+__version_info__ = (1, 7, 7, 1, 2012, 06, 19)
 __license__ = "GNU Lesser General Public License (LGPL)"
 
-__patches__ = "dynamore_client_open_channel",
+__patches__ = "dynamore_client_open_channel", "dlitz/issue49-rekeying-fix"
 
 
 from transport import SecurityOptions, Transport
