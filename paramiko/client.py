@@ -29,15 +29,15 @@ from errno import ECONNREFUSED, EHOSTUNREACH
 
 from paramiko.agent import Agent
 from paramiko.common import *
+from paramiko.config import SSH_PORT
 from paramiko.dsskey import DSSKey
 from paramiko.hostkeys import HostKeys
 from paramiko.resource import ResourceManager
 from paramiko.rsakey import RSAKey
 from paramiko.ssh_exception import SSHException, BadHostKeyException
 from paramiko.transport import Transport
+from paramiko.util import retry_on_signal
 
-
-SSH_PORT = 22
 
 class MissingHostKeyPolicy (object):
     """
@@ -83,7 +83,7 @@ class RejectPolicy (MissingHostKeyPolicy):
     def missing_host_key(self, client, hostname, key):
         client._log(DEBUG, 'Rejecting %s host key for %s: %s' %
                     (key.get_name(), hostname, hexlify(key.get_fingerprint())))
-        raise SSHException('Unknown server %s' % hostname)
+        raise SSHException('Server %r not found in known_hosts' % hostname)
 
 
 class WarningPolicy (MissingHostKeyPolicy):
@@ -248,7 +248,7 @@ class SSHClient (object):
 
     def connect(self, hostname, port=SSH_PORT, username=None, password=None, pkey=None,
                 key_filename=None, timeout=None, allow_agent=True, look_for_keys=True,
-                compress=False, channel=None):
+                compress=False, sock=None):
         """
         Connect to an SSH server and authenticate to it.  The server's host key
         is checked against the system host keys (see L{load_system_host_keys})
@@ -291,9 +291,9 @@ class SSHClient (object):
         @type look_for_keys: bool
         @param compress: set to True to turn on compression
         @type compress: bool
-        @param channel: an existing socket to use instead of connecting to hostname, None
-            if a new socket should be connected
-        @type channel: socket/Channel
+        @param sock: an open socket or socket-like object (such as a
+            L{Channel}) to use for communication to the target host
+        @type sock: socket
 
         @raise BadHostKeyException: if the server's host key could not be
             verified
@@ -302,8 +302,7 @@ class SSHClient (object):
             establishing an SSH session
         @raise socket.error: if a socket error occurred while connecting
         """
-
-        if channel is None:
+        if not sock:
             for af, addr in self._families_and_addresses(hostname, port):
                 try:
                     sock = socket.socket(af, socket.SOCK_STREAM)
@@ -312,7 +311,7 @@ class SSHClient (object):
                             sock.settimeout(timeout)
                         except:
                             pass
-                    sock.connect(addr)
+                    retry_on_signal(lambda: sock.connect(addr))
                     break
                 except socket.error, e:
                     # If the port is not open on IPv6 for example, we may still try IPv4.
@@ -325,12 +324,11 @@ class SSHClient (object):
                 # So reraise that exception or we end up with a borked socket that gives EOFError
                 # on each access.
                 raise
-            channel = sock
         else:
             if timeout is not None:
-                channel.settimeout(timeout)
+                sock.settimeout(timeout)
 
-        t = self._transport = Transport(channel)
+        t = self._transport = Transport(sock)
         t.use_compression(compress=compress)
         if self._log_channel is not None:
             t.set_log_channel(self._log_channel)
@@ -380,7 +378,7 @@ class SSHClient (object):
             self._agent.close()
             self._agent = None
 
-    def exec_command(self, command, bufsize=-1):
+    def exec_command(self, command, bufsize=-1, timeout=None):
         """
         Execute a command on the SSH server.  A new L{Channel} is opened and
         the requested command is executed.  The command's input and output
@@ -391,12 +389,15 @@ class SSHClient (object):
         @type command: str
         @param bufsize: interpreted the same way as by the built-in C{file()} function in python
         @type bufsize: int
+        @param timeout: set command's channel timeout. See L{Channel.settimeout}.settimeout
+        @type timeout: int
         @return: the stdin, stdout, and stderr of the executing command
         @rtype: tuple(L{ChannelFile}, L{ChannelFile}, L{ChannelFile})
 
         @raise SSHException: if the server fails to execute the command
         """
         chan = self._transport.open_session()
+        chan.settimeout(timeout)
         chan.exec_command(command)
         stdin = chan.makefile('wb', bufsize)
         stdout = chan.makefile('rb', bufsize)
@@ -454,82 +455,99 @@ class SSHClient (object):
             - Any "id_rsa" or "id_dsa" key discoverable in ~/.ssh/ (if allowed).
             - Plain username/password auth, if a password was given.
 
-        (The password might be needed to unlock a private key.)
+        (The password might be needed to unlock a private key, or for
+        two-factor authentication [for which it is required].)
         """
         saved_exception = None
+        two_factor = False
+        allowed_types = []
 
         if pkey is not None:
             try:
                 self._log(DEBUG, 'Trying SSH key %s' % hexlify(pkey.get_fingerprint()))
-                self._transport.auth_publickey(username, pkey)
-                return
+                allowed_types = self._transport.auth_publickey(username, pkey)
+                two_factor = (allowed_types == ['password'])
+                if not two_factor:
+                    return
             except SSHException, e:
                 saved_exception = e
 
-        for key_filename in key_filenames:
-            key = None
+        if not two_factor:
+            # Drop the exception if loading was successful.
             keyload_exception = None
+            for key_filename in key_filenames:
+                key = None
+                keyload_exception = None
+                for pkey_class in (RSAKey, DSSKey):
+                    try:
+                        key = pkey_class.from_private_key_file(key_filename, password)
+                        two_factor = (allowed_types == ['password'])
+#                        if not two_factor:
+#                            return
+                        break
+                    except SSHException, e:
+                        keyload_exception = e
 
-            for pkey_class in (RSAKey, DSSKey):
+                if keyload_exception is not None:
+                    self._log(DEBUG, 'Could not load key from %s: %s' % (key_filename, str(keyload_exception)))
+                    raise keyload_exception
+    
+                self._log(DEBUG, 'Trying key %s from %s' % (hexlify(key.get_fingerprint()), key_filename))
                 try:
-                    key = pkey_class.from_private_key_file(key_filename, password)
-                    # Drop the exception if loading was successful.
-                    keyload_exception = None
-                    break
+                    self._transport.auth_publickey(username, key)
+                    return
                 except SSHException, e:
-                    keyload_exception = e
+                    saved_exception = e
 
-            if keyload_exception is not None:
-                self._log(DEBUG, 'Could not load key from %s: %s' % (key_filename, str(keyload_exception)))
-                raise keyload_exception
-
-            self._log(DEBUG, 'Trying key %s from %s' % (hexlify(key.get_fingerprint()), key_filename))
-            try:
-                self._transport.auth_publickey(username, key)
-                return
-            except SSHException, e:
-                saved_exception = e
-
-        if allow_agent:
+        if not two_factor and allow_agent:
             if self._agent == None:
                 self._agent = Agent()
 
             for key in self._agent.get_keys():
                 try:
                     self._log(DEBUG, 'Trying SSH agent key %s' % hexlify(key.get_fingerprint()))
-                    self._transport.auth_publickey(username, key)
-                    return
+                    # for 2-factor auth a successfully auth'd key will result in ['password']
+                    allowed_types = self._transport.auth_publickey(username, key)
+                    two_factor = (allowed_types == ['password'])
+                    if not two_factor:
+                        return
+                    break
                 except SSHException, e:
                     saved_exception = e
 
-        keyfiles = []
-        rsa_key = os.path.expanduser('~/.ssh/id_rsa')
-        dsa_key = os.path.expanduser('~/.ssh/id_dsa')
-        if os.path.isfile(rsa_key):
-            keyfiles.append((RSAKey, rsa_key))
-        if os.path.isfile(dsa_key):
-            keyfiles.append((DSSKey, dsa_key))
-        # look in ~/ssh/ for windows users:
-        rsa_key = os.path.expanduser('~/ssh/id_rsa')
-        dsa_key = os.path.expanduser('~/ssh/id_dsa')
-        if os.path.isfile(rsa_key):
-            keyfiles.append((RSAKey, rsa_key))
-        if os.path.isfile(dsa_key):
-            keyfiles.append((DSSKey, dsa_key))
-
-        if not look_for_keys:
+        if not two_factor:
             keyfiles = []
+            rsa_key = os.path.expanduser('~/.ssh/id_rsa')
+            dsa_key = os.path.expanduser('~/.ssh/id_dsa')
+            if os.path.isfile(rsa_key):
+                keyfiles.append((RSAKey, rsa_key))
+            if os.path.isfile(dsa_key):
+                keyfiles.append((DSSKey, dsa_key))
+            # look in ~/ssh/ for windows users:
+            rsa_key = os.path.expanduser('~/ssh/id_rsa')
+            dsa_key = os.path.expanduser('~/ssh/id_dsa')
+            if os.path.isfile(rsa_key):
+                keyfiles.append((RSAKey, rsa_key))
+            if os.path.isfile(dsa_key):
+                keyfiles.append((DSSKey, dsa_key))
 
-        for pkey_class, filename in keyfiles:
-            try:
-                key = pkey_class.from_private_key_file(filename, password)
-                self._log(DEBUG, 'Trying discovered key %s in %s' % (hexlify(key.get_fingerprint()), filename))
-                self._transport.auth_publickey(username, key)
-                return
-            except SSHException, e:
-                saved_exception = e
-            except IOError, e:
-                saved_exception = e
+            if not look_for_keys:
+                keyfiles = []
+
+            for pkey_class, filename in keyfiles:
+                try:
+                    key = pkey_class.from_private_key_file(filename, password)
+                    self._log(DEBUG, 'Trying discovered key %s in %s' % (hexlify(key.get_fingerprint()), filename))
+                    # for 2-factor auth a successfully auth'd key will result in ['password']
+                    allowed_types = self._transport.auth_publickey(username, key)
+                    two_factor = (allowed_types == ['password'])
+                    if not two_factor:
+                        return
+                    break
+                except SSHException, e:
+                    saved_exception = e
+                except IOError, e:
+                    saved_exception = e
 
         if password is not None:
             try:
@@ -537,6 +555,8 @@ class SSHClient (object):
                 return
             except SSHException, e:
                 saved_exception = e
+        elif two_factor:
+            raise SSHException('Two-factor authentication requires a password')
 
         # if we got an auth-failed exception earlier, re-raise it
         if saved_exception is not None:
