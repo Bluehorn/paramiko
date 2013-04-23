@@ -484,6 +484,7 @@ class SSHClient (object):
                         two_factor = (allowed_types == ['password'])
 #                        if not two_factor:
 #                            return
+                        keyload_exception = None
                         break
                     except SSHException, e:
                         keyload_exception = e
