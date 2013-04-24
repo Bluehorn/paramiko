@@ -198,7 +198,7 @@ class SFTPClient (BaseSFTP):
         Open a file on the remote server.  The arguments are the same as for
         python's built-in C{file} (aka C{open}).  A file-like object is
         returned, which closely mimics the behavior of a normal python file
-        object.
+        object, including the ability to be used as a context manager.
 
         The mode indicates how the file is to be opened: C{'r'} for reading,
         C{'w'} for writing (truncating an existing file), C{'a'} for appending,
@@ -575,7 +575,7 @@ class SFTPClient (BaseSFTP):
                     break
         finally:
             fr.close()
-        if confirm and file_size:
+        if confirm:
             s = self.stat(remotepath)
             if s.st_size != size:
                 raise IOError('size mismatch in put!  %d != %d' % (s.st_size, size))
